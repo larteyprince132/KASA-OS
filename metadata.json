@@ -1,0 +1,6 @@
+{
+  "name": "KASA OS - Business Operating System",
+  "description": "Multi-tenant business operating system for SMEs with double-entry accounting, real-time inventory, sales, purchases, financial reports, and AI business intelligence.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
