@@ -1,13 +1,54 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import dotenv from 'dotenv';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
+
+// Dedicated Platform Super Admin Email
+const PLATFORM_SUPER_ADMIN_EMAIL = 'larteyprince132@gmail.com';
+
+// In-memory platform store for administrative management & synchronization
+interface PlatformStore {
+  businesses: any[];
+  users: any[];
+  auditLogs: any[];
+  settings: {
+    platformName: string;
+    maintenanceMode: boolean;
+    allowNewRegistrations: boolean;
+    defaultCurrency: string;
+    supportEmail: string;
+    updatedAt: string;
+  };
+}
+
+const platformStore: PlatformStore = {
+  businesses: [],
+  users: [],
+  auditLogs: [
+    {
+      id: 'log-sys-init',
+      action: 'PLATFORM_INITIALIZED',
+      details: 'KASA OS Super Admin engine initialized with zero default businesses.',
+      adminEmail: PLATFORM_SUPER_ADMIN_EMAIL,
+      adminUid: 'platform-owner',
+      timestamp: new Date().toISOString(),
+    },
+  ],
+  settings: {
+    platformName: 'KASA OS Multi-Tenant Platform',
+    maintenanceMode: false,
+    allowNewRegistrations: true,
+    defaultCurrency: 'GHS',
+    supportEmail: 'support@kasaos.com',
+    updatedAt: new Date().toISOString(),
+  },
+};
 
 // Initialize GoogleGenAI SDK on server-side
 const apiKey = process.env.GEMINI_API_KEY;
@@ -24,228 +65,397 @@ const ai = new GoogleGenAI({
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
-    system: 'KASA OS Business Engine',
-    version: '1.0.0',
+    system: 'KASA OS Business Engine & Super Admin Portal',
+    version: '2.0.0',
+    platformOwner: PLATFORM_SUPER_ADMIN_EMAIL,
     hasGeminiKey: Boolean(apiKey && apiKey !== 'MY_GEMINI_API_KEY'),
     timestamp: new Date().toISOString(),
   });
 });
 
 /**
- * Smart fallback business intelligence engine for when Gemini API key has 403 or rate limits
+ * Middleware: Verify Super Admin Access on Backend
  */
-function generateRuleBasedAnswer(message: string, orgContext: any): string {
-  const query = message.toLowerCase();
-  const symbol = orgContext?.currencySymbol || 'GH₵';
-  const metrics = orgContext?.metrics || {};
+function requireSuperAdmin(req: Request, res: Response, next: NextFunction): void {
+  const adminEmail = (req.headers['x-admin-email'] as string) || req.body?.adminEmail || (req.query?.adminEmail as string);
 
-  if (query.includes('collect') || query.includes('cash') || query.includes('inflow')) {
-    const realization = metrics.totalSales > 0 ? Math.round((metrics.collectedPayments / metrics.totalSales) * 100) : 100;
-    return `### Cash Realization Report for ${orgContext?.orgName || 'Business'}
-
-• **Total Invoiced Revenue:** ${symbol} ${metrics.totalSales?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-• **Cash Inflows Collected:** ${symbol} ${metrics.collectedPayments?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-• **Realization Ratio:** **${realization}%** of sales have been collected in cash/MoMo.
-• **Outstanding Customer Credit (AR):** ${symbol} ${metrics.outstandingReceivables?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-
-**Actionable Advice:** Your cash collection velocity is ${realization >= 70 ? 'strong' : 'lagging'}. Follow up on credit balances for trade accounts before extending new credit orders.`;
+  if (!adminEmail || adminEmail.toLowerCase().trim() !== PLATFORM_SUPER_ADMIN_EMAIL.toLowerCase().trim()) {
+    res.status(403).json({
+      error: 'ACCESS_DENIED',
+      message: 'Administrative privileges required. Only the platform owner can access this resource.',
+    });
+    return;
   }
-
-  if (query.includes('owe') || query.includes('debt') || query.includes('customer')) {
-    const debtors = orgContext?.customersWithDebt || [];
-    if (debtors.length === 0) {
-      return `### Outstanding Customer Receivables\n\nAll customer accounts are currently settled in full! There are zero delinquent debts.`;
-    }
-    const lines = debtors.map((d: any) => `• **${d.name}:** owes **${symbol} ${d.outstandingBalance?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}** (Tel: ${d.phone || 'N/A'})`).join('\n');
-    return `### Customers Owing Balances (${debtors.length} active debtors)
-
-Total Receivables Owed: **${symbol} ${metrics.outstandingReceivables?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}**
-
-${lines}
-
-**Recommendation:** Prioritize recovering balances from high-turnover contractor accounts using automated Mobile Money payment links.`;
-  }
-
-  if (query.includes('profit') || query.includes('margin') || query.includes('gross') || query.includes('net')) {
-    const grossMargin = metrics.totalSales > 0 ? Math.round((metrics.grossProfit / metrics.totalSales) * 100) : 0;
-    const netMargin = metrics.totalSales > 0 ? Math.round((metrics.netProfit / metrics.totalSales) * 100) : 0;
-    return `### Profitability Breakdown for ${orgContext?.orgName || 'Business'}
-
-• **Sales Turnover:** ${symbol} ${metrics.totalSales?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-• **Gross Profit:** ${symbol} ${metrics.grossProfit?.toLocaleString('en-GH', { minimumFractionDigits: 2 })} (**${grossMargin}% gross margin**)
-• **Operating Overheads (OPEX):** ${symbol} ${metrics.totalExpenses?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-• **Net Operating Profit:** ${symbol} ${metrics.netProfit?.toLocaleString('en-GH', { minimumFractionDigits: 2 })} (**${netMargin}% net bottom-line**)
-
-**Analysis:** Your product gross margin is healthy at ${grossMargin}%. Ensure rent and logistics overheads remain within working capital limits.`;
-  }
-
-  if (query.includes('stock') || query.includes('reorder') || query.includes('inventory')) {
-    const lowStock = orgContext?.lowStockItems || [];
-    if (lowStock.length === 0) {
-      return `### Inventory Status\n\nAll catalog products have sufficient stock levels above their minimum reorder thresholds. Total inventory valuation is **${symbol} ${metrics.inventoryValue?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}**.`;
-    }
-    const lines = lowStock.map((item: any) => `• **${item.name}:** Current Stock: **${item.stock}**, Min Reorder Point: **${item.reorderPoint}** (Unit Cost: ${symbol}${item.cost})`).join('\n');
-    return `### Reorder Alert (${lowStock.length} items below minimum threshold)
-
-${lines}
-
-Total Inventory Valuation (WAC): **${symbol} ${metrics.inventoryValue?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}**
-**Action Required:** Raise purchase orders to suppliers before these high-velocity items deplete completely.`;
-  }
-
-  if (query.includes('expense') || query.includes('overhead')) {
-    const recent = orgContext?.recentExpenses || [];
-    const lines = recent.slice(0, 5).map((e: any) => `• **${e.category}:** ${symbol}${e.amount?.toLocaleString('en-GH', { minimumFractionDigits: 2 })} to ${e.payee} (${e.date})`).join('\n');
-    return `### Operating Expenses Summary
-
-Total Overhead Disbursements: **${symbol} ${metrics.totalExpenses?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}**
-
-Recent Key Disbursements:
-${lines}
-
-**Optimization Tip:** Review facility power usage and logistics route planning to reduce fuel costs.`;
-  }
-
-  // Default summary response
-  return `### Executive Financial Brief for ${orgContext?.orgName || 'Business'}
-
-• **Invoiced Turnover:** ${symbol} ${metrics.totalSales?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-• **Realized Cash Collections:** ${symbol} ${metrics.collectedPayments?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-• **Accounts Receivable (Debtors):** ${symbol} ${metrics.outstandingReceivables?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-• **Accounts Payable (Creditors):** ${symbol} ${metrics.outstandingPayables?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-• **Net Cash Position:** ${symbol} ${metrics.cashPosition?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-• **Net Operating Profit:** ${symbol} ${metrics.netProfit?.toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-
-You can ask me specifically about cash collections, debtor balances, profit margins, stock reorder levels, or operating overheads.`;
+  next();
 }
 
 /**
- * Natural language transaction parser fallback
+ * Super Admin Endpoint: Verify Super Admin Status
  */
-function parseTransactionFallback(input: string, products: any[], customers: any[]) {
-  const text = input.toLowerCase();
+app.post('/api/admin/verify', (req: Request, res: Response) => {
+  const { email } = req.body;
+  const isSuperAdmin = Boolean(
+    email && email.toLowerCase().trim() === PLATFORM_SUPER_ADMIN_EMAIL.toLowerCase().trim()
+  );
 
-  // Extract total transaction amount (e.g. "for GH₵625" or "for 625" or "GH₵625")
-  let totalAmount = 0;
-  const forMatch = input.match(/(?:for|total|at)\s*(?:GH[₵c]|GHS|\$|€|£)?\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2})?)/i);
-  if (forMatch) {
-    totalAmount = parseFloat(forMatch[1].replace(/,/g, ''));
+  res.json({
+    isSuperAdmin,
+    email: email || null,
+    superAdminEmail: PLATFORM_SUPER_ADMIN_EMAIL,
+  });
+});
+
+/**
+ * Sync endpoint: Businesses register or report state to platform registry
+ */
+app.post('/api/platform/sync-business', (req: Request, res: Response) => {
+  try {
+    const business = req.body;
+    if (!business || !business.id) {
+      res.status(400).json({ error: 'Valid business record is required' });
+      return;
+    }
+
+    const existingIndex = platformStore.businesses.findIndex((b) => b.id === business.id);
+    if (existingIndex >= 0) {
+      platformStore.businesses[existingIndex] = {
+        ...platformStore.businesses[existingIndex],
+        ...business,
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      platformStore.businesses.unshift({
+        ...business,
+        status: business.status || 'active',
+        createdAt: business.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      // Log registration to audit logs
+      platformStore.auditLogs.unshift({
+        id: `log-reg-${Date.now()}`,
+        action: 'BUSINESS_REGISTERED',
+        details: `New business "${business.name}" registered in industry "${business.industry}".`,
+        adminEmail: 'system',
+        adminUid: 'system',
+        targetBusinessId: business.id,
+        targetBusinessName: business.name,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    res.json({ success: true, count: platformStore.businesses.length });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to sync business' });
+  }
+});
+
+/**
+ * Sync endpoint: User registration report
+ */
+app.post('/api/platform/sync-user', (req: Request, res: Response) => {
+  try {
+    const user = req.body;
+    if (!user || !user.uid) {
+      res.status(400).json({ error: 'Valid user record is required' });
+      return;
+    }
+
+    const existingIndex = platformStore.users.findIndex((u) => u.uid === user.uid);
+    if (existingIndex >= 0) {
+      platformStore.users[existingIndex] = {
+        ...platformStore.users[existingIndex],
+        ...user,
+      };
+    } else {
+      platformStore.users.unshift({
+        ...user,
+        status: user.status || 'active',
+        createdAt: user.createdAt || new Date().toISOString(),
+      });
+    }
+
+    res.json({ success: true, count: platformStore.users.length });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to sync user' });
+  }
+});
+
+/**
+ * Super Admin: Platform Overview
+ */
+app.get('/api/admin/overview', requireSuperAdmin, (_req: Request, res: Response) => {
+  const totalBusinesses = platformStore.businesses.length;
+  const activeBusinesses = platformStore.businesses.filter((b) => b.status === 'active').length;
+  const suspendedBusinesses = platformStore.businesses.filter((b) => b.status === 'suspended').length;
+  const totalUsers = platformStore.users.length;
+
+  const industryCounts: Record<string, number> = {};
+  platformStore.businesses.forEach((b) => {
+    const ind = b.industry || 'other';
+    industryCounts[ind] = (industryCounts[ind] || 0) + 1;
+  });
+
+  res.json({
+    totalBusinesses,
+    activeBusinesses,
+    suspendedBusinesses,
+    totalUsers,
+    recentRegistrations: platformStore.businesses.slice(0, 5),
+    recentActivity: platformStore.auditLogs.slice(0, 10),
+    industryCounts,
+    settings: platformStore.settings,
+  });
+});
+
+/**
+ * Super Admin: Business Directory (Search, Filter, Sort)
+ */
+app.get('/api/admin/businesses', requireSuperAdmin, (req: Request, res: Response) => {
+  const { search, industry, status, sort } = req.query;
+
+  let results = [...platformStore.businesses];
+
+  if (search && typeof search === 'string') {
+    const term = search.toLowerCase();
+    results = results.filter(
+      (b) =>
+        b.name?.toLowerCase().includes(term) ||
+        b.email?.toLowerCase().includes(term) ||
+        b.ownerEmail?.toLowerCase().includes(term) ||
+        b.id?.toLowerCase().includes(term)
+    );
+  }
+
+  if (industry && typeof industry === 'string' && industry !== 'all') {
+    results = results.filter((b) => b.industry === industry);
+  }
+
+  if (status && typeof status === 'string' && status !== 'all') {
+    results = results.filter((b) => b.status === status);
+  }
+
+  if (sort === 'oldest') {
+    results.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  } else if (sort === 'name') {
+    results.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   } else {
-    const allAmounts = Array.from(input.matchAll(/(?:GH[₵c]|GHS|\$|€|£)\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2})?)/gi));
-    if (allAmounts.length > 0) {
-      totalAmount = parseFloat(allAmounts[0][1].replace(/,/g, ''));
-    }
+    // Newest first default
+    results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
-  // Extract paid amount (e.g. "Customer paid GH₵400" or "paid 400" or "advance of 400")
-  let paidAmount = totalAmount;
-  const paidMatch = input.match(/paid\s*(?:GH[₵c]|GHS|\$|€|£)?\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2})?)/i);
-  if (paidMatch) {
-    paidAmount = parseFloat(paidMatch[1].replace(/,/g, ''));
-  } else if (text.includes('owes the balance') || text.includes('on credit')) {
-    const allCurrency = Array.from(input.matchAll(/(?:GH[₵c]|GHS|\$|€|£)\s*([0-9]+)/gi));
-    if (allCurrency.length >= 2) {
-      paidAmount = parseFloat(allCurrency[1][1]);
-    }
-  }
-
-  const balanceAmount = Math.max(0, totalAmount - paidAmount);
-
-  // Extract quantity (e.g. "5 bags", "20 pieces", "10 units")
-  const qtyMatch = input.match(/([0-9]+)\s*(?:bags|pcs|pieces|buckets|packs|trip|units|box|boxes)/i) || input.match(/(?:sold|bought|received)\s*([0-9]+)/i);
-  const quantity = qtyMatch ? parseInt(qtyMatch[1]) : 1;
-
-  // Match product
-  let matchedProduct = products[0];
-  for (const p of products) {
-    const pName = p.name.toLowerCase();
-    const words = pName.split(/[\s,()\-]+/);
-    if (words.some((w: string) => w.length >= 3 && text.includes(w))) {
-      matchedProduct = p;
-      break;
-    }
-  }
-
-  // Match customer
-  let matchedCustomer = customers[0];
-  for (const c of customers) {
-    const cName = c.name.toLowerCase();
-    const words = cName.split(/[\s,()\-]+/);
-    if (words.some((w: string) => w.length >= 3 && text.includes(w))) {
-      matchedCustomer = c;
-      break;
-    }
-  }
-
-  // Payment method
-  let paymentMethod = 'momo';
-  if (text.includes('cash')) paymentMethod = 'cash';
-  else if (text.includes('bank') || text.includes('wire') || text.includes('transfer')) paymentMethod = 'bank_transfer';
-  else if (text.includes('cheque') || text.includes('check')) paymentMethod = 'cheque';
-
-  const unitPrice = quantity > 0 && totalAmount > 0 ? Math.round((totalAmount / quantity) * 100) / 100 : (matchedProduct?.sellingPrice || 125);
-  if (totalAmount === 0 && matchedProduct) {
-    totalAmount = quantity * unitPrice;
-    if (paidAmount === 0 && !text.includes('credit')) {
-      paidAmount = totalAmount;
-    }
-  }
-
-  return {
-    customerName: matchedCustomer?.name || 'Walk-in Client',
-    matchedCustomerId: matchedCustomer?.id || 'cust-walkin',
-    items: [
-      {
-        productId: matchedProduct?.id || 'prod-cement-dangote',
-        productName: matchedProduct?.name || 'Dangote 42.5R Portland Cement (50kg)',
-        quantity,
-        unitPrice,
-        total: totalAmount,
-      },
-    ],
-    totalAmount,
-    paidAmount,
-    balanceAmount,
-    paymentMethod,
-    paymentStatus: balanceAmount <= 0 ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid',
-    notes: 'Interpreted via conversational input',
-    summary: `Interpreted: Sold ${quantity} unit(s) of ${matchedProduct?.name || 'goods'} for GH₵${totalAmount}. Paid GH₵${paidAmount} via ${paymentMethod.toUpperCase()}, balance GH₵${balanceAmount} owed.`,
-  };
-}
+  res.json({ businesses: results, total: results.length });
+});
 
 /**
- * Endpoint: POST /api/gemini/chat
+ * Super Admin: Business Status Management (Activate / Suspend / Reactivate)
+ */
+app.post('/api/admin/business/status', requireSuperAdmin, (req: Request, res: Response) => {
+  const { businessId, status, adminEmail, reason } = req.body;
+
+  if (!businessId || !['active', 'suspended'].includes(status)) {
+    res.status(400).json({ error: 'Valid businessId and status ("active" | "suspended") are required' });
+    return;
+  }
+
+  const business = platformStore.businesses.find((b) => b.id === businessId);
+  if (!business) {
+    res.status(404).json({ error: 'Business not found' });
+    return;
+  }
+
+  const previousStatus = business.status;
+  business.status = status;
+  business.updatedAt = new Date().toISOString();
+
+  // Record administrative action in audit log
+  const auditEntry = {
+    id: `log-admin-${Date.now()}`,
+    action: status === 'active' ? 'BUSINESS_ACTIVATED' : 'BUSINESS_SUSPENDED',
+    details: `Business "${business.name}" status changed from ${previousStatus} to ${status}. Reason: ${reason || 'Administrative action'}`,
+    adminEmail: adminEmail || PLATFORM_SUPER_ADMIN_EMAIL,
+    adminUid: 'super-admin-uid',
+    targetBusinessId: business.id,
+    targetBusinessName: business.name,
+    timestamp: new Date().toISOString(),
+  };
+
+  platformStore.auditLogs.unshift(auditEntry);
+
+  res.json({
+    success: true,
+    business,
+    auditLog: auditEntry,
+  });
+});
+
+/**
+ * Super Admin: User Management
+ */
+app.get('/api/admin/users', requireSuperAdmin, (_req: Request, res: Response) => {
+  res.json({ users: platformStore.users, total: platformStore.users.length });
+});
+
+app.post('/api/admin/user/status', requireSuperAdmin, (req: Request, res: Response) => {
+  const { uid, status, adminEmail } = req.body;
+
+  const user = platformStore.users.find((u) => u.uid === uid);
+  if (!user) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+
+  user.status = status;
+  platformStore.auditLogs.unshift({
+    id: `log-user-${Date.now()}`,
+    action: `USER_${status.toUpperCase()}`,
+    details: `User "${user.email}" account status updated to ${status}.`,
+    adminEmail: adminEmail || PLATFORM_SUPER_ADMIN_EMAIL,
+    adminUid: 'super-admin-uid',
+    timestamp: new Date().toISOString(),
+  });
+
+  res.json({ success: true, user });
+});
+
+/**
+ * Super Admin: Platform Analytics
+ */
+app.get('/api/admin/analytics', requireSuperAdmin, (_req: Request, res: Response) => {
+  const industries = [
+    'retail',
+    'wholesale',
+    'manufacturing',
+    'agriculture',
+    'hospitality',
+    'services',
+    'construction',
+    'automotive',
+    'ecommerce',
+    'other',
+  ];
+
+  const industryDistribution = industries.map((ind) => ({
+    industry: ind,
+    count: platformStore.businesses.filter((b) => b.industry === ind).length,
+  }));
+
+  const activeCount = platformStore.businesses.filter((b) => b.status === 'active').length;
+  const suspendedCount = platformStore.businesses.filter((b) => b.status === 'suspended').length;
+
+  res.json({
+    industryDistribution,
+    statusBreakdown: [
+      { name: 'Active', value: activeCount },
+      { name: 'Suspended', value: suspendedCount },
+    ],
+    totalBusinesses: platformStore.businesses.length,
+    totalUsers: platformStore.users.length,
+  });
+});
+
+/**
+ * Super Admin: Audit Logs
+ */
+app.get('/api/admin/audit-logs', requireSuperAdmin, (_req: Request, res: Response) => {
+  res.json({ logs: platformStore.auditLogs, total: platformStore.auditLogs.length });
+});
+
+/**
+ * Super Admin: Platform Settings
+ */
+app.get('/api/admin/settings', requireSuperAdmin, (_req: Request, res: Response) => {
+  res.json({ settings: platformStore.settings });
+});
+
+app.post('/api/admin/settings', requireSuperAdmin, (req: Request, res: Response) => {
+  const { platformName, maintenanceMode, allowNewRegistrations, defaultCurrency, supportEmail, adminEmail } = req.body;
+
+  platformStore.settings = {
+    ...platformStore.settings,
+    platformName: platformName ?? platformStore.settings.platformName,
+    maintenanceMode: typeof maintenanceMode === 'boolean' ? maintenanceMode : platformStore.settings.maintenanceMode,
+    allowNewRegistrations:
+      typeof allowNewRegistrations === 'boolean' ? allowNewRegistrations : platformStore.settings.allowNewRegistrations,
+    defaultCurrency: defaultCurrency ?? platformStore.settings.defaultCurrency,
+    supportEmail: supportEmail ?? platformStore.settings.supportEmail,
+    updatedAt: new Date().toISOString(),
+  };
+
+  platformStore.auditLogs.unshift({
+    id: `log-set-${Date.now()}`,
+    action: 'SETTINGS_UPDATED',
+    details: `Platform settings updated by ${adminEmail || PLATFORM_SUPER_ADMIN_EMAIL}.`,
+    adminEmail: adminEmail || PLATFORM_SUPER_ADMIN_EMAIL,
+    adminUid: 'super-admin-uid',
+    timestamp: new Date().toISOString(),
+  });
+
+  res.json({ success: true, settings: platformStore.settings });
+});
+
+/**
+ * AI Business Intelligence Chat Endpoint
  */
 app.post('/api/gemini/chat', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { message, orgContext } = req.body;
+    const { message, businessContext } = req.body;
 
     if (!message || typeof message !== 'string') {
       res.status(400).json({ error: 'Message is required' });
       return;
     }
 
-    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-      const fallbackReply = generateRuleBasedAnswer(message, orgContext);
-      res.json({ reply: fallbackReply, grounded: true, timestamp: new Date().toISOString() });
+    const businessName = businessContext?.name || 'Business Workspace';
+    const currency = businessContext?.currencySymbol || 'GH₵';
+    const metrics = businessContext?.metrics || {};
+
+    const hasNoData = (metrics.salesCount || 0) === 0 && (metrics.inventoryCount || 0) === 0;
+
+    if (hasNoData) {
+      res.json({
+        reply: `### Welcome to ${businessName} Intelligence!
+Your workspace is completely new and ready for records. To begin:
+1. **Add your catalog products** in the Inventory section so you can track stock.
+2. **Record your first sale** to generate invoices and start tracking cash flow.
+3. **Log operational expenses** (such as rent or utilities) to monitor your profit and overheads.
+
+Once you record transactions, I will analyze your gross margins, cash collection velocity, customer receivables, and stock reorder levels.`,
+        grounded: true,
+        timestamp: new Date().toISOString(),
+      });
       return;
     }
 
-    const systemInstruction = `You are KASA Intelligence, the expert AI CFO and business operations co-pilot built directly into KASA OS.
-You are assisting the management of "${orgContext?.orgName || 'the business'}".
-Currency: ${orgContext?.currencySymbol || 'GH₵'} (${orgContext?.currency || 'GHS'}).
-Every numerical answer MUST BE GROUNDED in the verified business records provided in this context:
-- Total Sales: ${orgContext?.currencySymbol || 'GH₵'}${orgContext?.metrics?.totalSales ?? 0}
-- Cash Collected: ${orgContext?.currencySymbol || 'GH₵'}${orgContext?.metrics?.collectedPayments ?? 0}
-- Customer Receivables: ${orgContext?.currencySymbol || 'GH₵'}${orgContext?.metrics?.outstandingReceivables ?? 0}
-- Operating Overheads: ${orgContext?.currencySymbol || 'GH₵'}${orgContext?.metrics?.totalExpenses ?? 0}
-- Gross Profit: ${orgContext?.currencySymbol || 'GH₵'}${orgContext?.metrics?.grossProfit ?? 0}
-- Net Profit: ${orgContext?.currencySymbol || 'GH₵'}${orgContext?.metrics?.netProfit ?? 0}
-- Inventory Value: ${orgContext?.currencySymbol || 'GH₵'}${orgContext?.metrics?.inventoryValue ?? 0}
-- Payables to Suppliers: ${orgContext?.currencySymbol || 'GH₵'}${orgContext?.metrics?.outstandingPayables ?? 0}
-- Low Stock Items: ${JSON.stringify(orgContext?.lowStockItems || [])}
-- Debtors: ${JSON.stringify(orgContext?.customersWithDebt || [])}
-Be concise, professional, and practical for SME business operations in Ghana.`;
+    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+      res.json({
+        reply: `### Financial Overview for ${businessName}
+• **Total Sales:** ${currency}${metrics.totalSales?.toLocaleString()} (${metrics.salesCount || 0} sales recorded)
+• **Cash Inflows:** ${currency}${metrics.cashInflows?.toLocaleString()}
+• **Outstanding Receivables:** ${currency}${metrics.outstandingReceivables?.toLocaleString()}
+• **Operating Expenses:** ${currency}${metrics.totalExpenses?.toLocaleString()}
+• **Net Profit:** ${currency}${metrics.netProfit?.toLocaleString()}
+
+You can ask me to analyze profit margins, low stock alerts, or credit collection strategies.`,
+        grounded: true,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const systemInstruction = `You are KASA Intelligence, the expert AI CFO and business operations co-pilot for KASA OS.
+You are advising the management of "${businessName}".
+Currency: ${currency}.
+Strictly ground answers in these business records:
+- Total Sales: ${currency}${metrics.totalSales ?? 0}
+- Cash Collected: ${currency}${metrics.cashInflows ?? 0}
+- Customer Receivables: ${currency}${metrics.outstandingReceivables ?? 0}
+- Total Expenses: ${currency}${metrics.totalExpenses ?? 0}
+- Gross Profit: ${currency}${metrics.grossProfit ?? 0}
+- Net Profit: ${currency}${metrics.netProfit ?? 0}
+- Inventory Value: ${currency}${metrics.inventoryValue ?? 0}
+- Total Catalog Items: ${metrics.inventoryCount ?? 0}
+Be concise, practical, and helpful for SME operations.`;
 
     try {
       const response = await Promise.race([
@@ -262,130 +472,26 @@ Be concise, professional, and practical for SME business operations in Ghana.`;
         grounded: true,
         timestamp: new Date().toISOString(),
       });
-    } catch (genAiError) {
-      console.warn('Gemini generateContent fallback triggered:', (genAiError as any).message);
-      const fallbackReply = generateRuleBasedAnswer(message, orgContext);
-      res.json({ reply: fallbackReply, grounded: true, timestamp: new Date().toISOString() });
+    } catch {
+      res.json({
+        reply: `### Executive Financial Brief for ${businessName}
+• **Total Sales:** ${currency}${metrics.totalSales?.toLocaleString()}
+• **Cash Collected:** ${currency}${metrics.cashInflows?.toLocaleString()}
+• **Outstanding Receivables:** ${currency}${metrics.outstandingReceivables?.toLocaleString()}
+• **Operating Expenses:** ${currency}${metrics.totalExpenses?.toLocaleString()}
+• **Net Profit:** ${currency}${metrics.netProfit?.toLocaleString()}
+
+Ask me anything about profitability, working capital, or expense reduction.`,
+        grounded: true,
+        timestamp: new Date().toISOString(),
+      });
     }
   } catch (error) {
-    console.error('Error in /api/gemini/chat:', error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : 'Failed to communicate with AI',
-    });
+    res.status(500).json({ error: 'AI processing failed' });
   }
 });
 
-/**
- * Endpoint: POST /api/gemini/parse-transaction
- */
-app.post('/api/gemini/parse-transaction', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { input, products = [], customers = [] } = req.body;
-
-    if (!input || typeof input !== 'string') {
-      res.status(400).json({ error: 'Text input is required' });
-      return;
-    }
-
-    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-      const fallback = parseTransactionFallback(input, products, customers);
-      res.json({ success: true, data: fallback });
-      return;
-    }
-
-    try {
-      const prompt = `Interpret the following business transaction text and extract structured sales data:
-"${input}"
-Catalog Products: ${JSON.stringify(products.map((p: any) => ({ id: p.id, name: p.name, price: p.sellingPrice })))}
-Customers: ${JSON.stringify(customers.map((c: any) => ({ id: c.id, name: c.name })))}`;
-
-      const response = await Promise.race([
-        ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                customerName: { type: Type.STRING },
-                matchedCustomerId: { type: Type.STRING },
-                items: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      productId: { type: Type.STRING },
-                      productName: { type: Type.STRING },
-                      quantity: { type: Type.NUMBER },
-                      unitPrice: { type: Type.NUMBER },
-                      total: { type: Type.NUMBER },
-                    },
-                    required: ['productName', 'quantity', 'unitPrice', 'total'],
-                  },
-                },
-                totalAmount: { type: Type.NUMBER },
-                paidAmount: { type: Type.NUMBER },
-                balanceAmount: { type: Type.NUMBER },
-                paymentMethod: { type: Type.STRING, enum: ['cash', 'momo', 'bank_transfer', 'cheque'] },
-                paymentStatus: { type: Type.STRING, enum: ['paid', 'partial', 'unpaid'] },
-                summary: { type: Type.STRING },
-              },
-              required: ['customerName', 'items', 'totalAmount', 'paidAmount', 'balanceAmount', 'paymentMethod', 'paymentStatus', 'summary'],
-            },
-          },
-        }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 4000)),
-      ]);
-
-      const parsed = JSON.parse((response as any).text || '{}');
-      res.json({ success: true, data: parsed });
-    } catch (aiErr) {
-      console.warn('Gemini parse fallback triggered:', (aiErr as any).message);
-      const fallback = parseTransactionFallback(input, products, customers);
-      res.json({ success: true, data: fallback });
-    }
-  } catch (error) {
-    console.error('Error in /api/gemini/parse-transaction:', error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : 'Failed to parse transaction',
-    });
-  }
-});
-
-/**
- * Endpoint: POST /api/gemini/receipt-ocr
- */
-app.post('/api/gemini/receipt-ocr', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { base64Data, mimeType = 'image/jpeg' } = req.body;
-
-    if (!base64Data) {
-      res.status(400).json({ error: 'base64Data image is required' });
-      return;
-    }
-
-    // Default high-fidelity scan extraction
-    res.json({
-      success: true,
-      data: {
-        merchantName: 'GOIL Filling Station (Spintex Rd, Accra)',
-        date: new Date().toISOString().split('T')[0],
-        referenceNumber: `RC-${Date.now().toString().slice(-5)}`,
-        items: [{ name: 'Diesel Fuel (Super)', quantity: 45, unitCost: 14.5, total: 652.5 }],
-        totalAmount: 652.5,
-        category: 'transport_logistics',
-      },
-    });
-  } catch (error) {
-    console.error('Error in /api/gemini/receipt-ocr:', error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : 'Failed to extract receipt image',
-    });
-  }
-});
-
-// Configure Vite middleware in development or Express static in production
+// Configure Vite in dev or static in prod
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
 
@@ -405,7 +511,7 @@ async function startServer() {
 
   const PORT = 3000;
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[KASA OS] Core Business Server listening on http://0.0.0.0:${PORT}`);
+    console.log(`[KASA OS] Multi-Tenant Platform & Super Admin listening on http://0.0.0.0:${PORT}`);
   });
 }
 

@@ -1,107 +1,205 @@
 {
   "entities": {
-    "Organization": {
-      "title": "Organization",
-      "description": "Multi-tenant business account entity",
+    "Business": {
+      "title": "Business",
+      "description": "Multi-tenant business entity with isolated workspace",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "name": { "type": "string" },
         "industry": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
         "country": { "type": "string" },
         "currency": { "type": "string" },
+        "currencySymbol": { "type": "string" },
         "ownerId": { "type": "string" },
+        "ownerEmail": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "industry", "ownerId", "ownerEmail", "status", "currency", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with role and business association",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "businessId": { "type": "string" },
+        "businessName": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "admin", "manager", "staff", "SUPER_ADMIN"] },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
         "createdAt": { "type": "string" }
       },
-      "required": ["id", "name", "industry", "currency", "ownerId"]
+      "required": ["uid", "email", "role", "status", "createdAt"]
     },
     "Sale": {
       "title": "Sale",
-      "description": "Commercial customer sale and invoice",
+      "description": "Sales invoice record within a business tenant",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "orgId": { "type": "string" },
+        "businessId": { "type": "string" },
         "invoiceNumber": { "type": "string" },
         "customerId": { "type": "string" },
         "customerName": { "type": "string" },
         "totalAmount": { "type": "number" },
         "paidAmount": { "type": "number" },
         "balanceAmount": { "type": "number" },
-        "paymentStatus": { "type": "string" },
-        "paymentMethod": { "type": "string" },
-        "date": { "type": "string" }
+        "paymentStatus": { "type": "string", "enum": ["paid", "partial", "unpaid"] },
+        "paymentMethod": { "type": "string", "enum": ["cash", "momo", "bank_transfer", "cheque", "card"] },
+        "date": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "orgId", "invoiceNumber", "totalAmount", "paidAmount", "balanceAmount"]
+      "required": ["id", "businessId", "invoiceNumber", "totalAmount", "paidAmount", "balanceAmount", "paymentStatus", "date"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Operating expense record within a business tenant",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "category": { "type": "string" },
+        "payee": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "date": { "type": "string" },
+        "notes": { "type": "string" },
+        "receiptRef": { "type": "string" },
+        "taxDeductible": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "businessId", "category", "payee", "amount", "paymentMethod", "date"]
     },
     "Product": {
       "title": "Product",
-      "description": "Inventory product item",
+      "description": "Inventory product item within a business tenant",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "orgId": { "type": "string" },
+        "businessId": { "type": "string" },
         "sku": { "type": "string" },
         "name": { "type": "string" },
+        "category": { "type": "string" },
         "purchaseCost": { "type": "number" },
         "sellingPrice": { "type": "number" },
         "stockQuantity": { "type": "number" },
-        "minReorderPoint": { "type": "number" }
+        "minReorderPoint": { "type": "number" },
+        "unit": { "type": "string" },
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "orgId", "sku", "name", "purchaseCost", "sellingPrice"]
+      "required": ["id", "businessId", "name", "purchaseCost", "sellingPrice", "stockQuantity"]
     },
     "Customer": {
       "title": "Customer",
-      "description": "Trade customer account with receivables tracking",
+      "description": "Customer record within a business tenant",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "orgId": { "type": "string" },
+        "businessId": { "type": "string" },
         "name": { "type": "string" },
         "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "creditLimit": { "type": "number" },
         "outstandingBalance": { "type": "number" },
-        "totalPurchases": { "type": "number" }
+        "totalPurchases": { "type": "number" },
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "orgId", "name", "outstandingBalance"]
+      "required": ["id", "businessId", "name", "outstandingBalance"]
     },
-    "LedgerEntry": {
-      "title": "LedgerEntry",
-      "description": "Immutable double-entry general ledger journal row",
+    "Supplier": {
+      "title": "Supplier",
+      "description": "Supplier / vendor record within a business tenant",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "orgId": { "type": "string" },
-        "transactionId": { "type": "string" },
-        "accountCode": { "type": "string" },
-        "accountName": { "type": "string" },
-        "debit": { "type": "number" },
-        "credit": { "type": "number" },
-        "reference": { "type": "string" },
-        "date": { "type": "string" }
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "contactPerson": { "type": "string" },
+        "paymentTerms": { "type": "string" },
+        "outstandingBalance": { "type": "number" },
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "orgId", "transactionId", "accountCode", "debit", "credit"]
+      "required": ["id", "businessId", "name", "outstandingBalance"]
+    },
+    "PlatformAuditLog": {
+      "title": "PlatformAuditLog",
+      "description": "Super admin administrative audit log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "adminEmail": { "type": "string" },
+        "adminUid": { "type": "string" },
+        "targetBusinessId": { "type": "string" },
+        "targetBusinessName": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "action", "details", "adminEmail", "timestamp"]
+    },
+    "PlatformSetting": {
+      "title": "PlatformSetting",
+      "description": "System-wide platform settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "platformName": { "type": "string" },
+        "maintenanceMode": { "type": "boolean" },
+        "allowNewRegistrations": { "type": "boolean" },
+        "defaultCurrency": { "type": "string" },
+        "supportEmail": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "platformName", "maintenanceMode", "allowNewRegistrations"]
     }
   },
   "firestore": {
-    "/organizations/{orgId}": {
-      "schema": { "$ref": "#/entities/Organization" },
-      "description": "Organization tenant root"
+    "/businesses/{businessId}": {
+      "schema": { "$ref": "#/entities/Business" },
+      "description": "Business tenant root"
     },
-    "/organizations/{orgId}/sales/{saleId}": {
+    "/businesses/{businessId}/sales/{saleId}": {
       "schema": { "$ref": "#/entities/Sale" },
-      "description": "Customer sales and invoices"
+      "description": "Customer sales and invoices for tenant"
     },
-    "/organizations/{orgId}/products/{productId}": {
+    "/businesses/{businessId}/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "Operating expenses for tenant"
+    },
+    "/businesses/{businessId}/inventory/{productId}": {
       "schema": { "$ref": "#/entities/Product" },
-      "description": "Catalog products and stock levels"
+      "description": "Inventory products for tenant"
     },
-    "/organizations/{orgId}/customers/{customerId}": {
+    "/businesses/{businessId}/customers/{customerId}": {
       "schema": { "$ref": "#/entities/Customer" },
-      "description": "Customer accounts and debtor balances"
+      "description": "Customer accounts for tenant"
     },
-    "/organizations/{orgId}/ledgerEntries/{entryId}": {
-      "schema": { "$ref": "#/entities/LedgerEntry" },
-      "description": "Immutable double-entry journal rows"
+    "/businesses/{businessId}/suppliers/{supplierId}": {
+      "schema": { "$ref": "#/entities/Supplier" },
+      "description": "Suppliers and vendors for tenant"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Platform user profiles"
+    },
+    "/platform_audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/PlatformAuditLog" },
+      "description": "Super admin audit trail"
+    },
+    "/platform_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/PlatformSetting" },
+      "description": "Global platform configurations"
     }
   }
 }

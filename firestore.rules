@@ -14,47 +14,110 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    function isOrgMember(orgId) {
+    // Platform Super Admin logic - checks verified platform owner or admins collection
+    function isSuperAdmin() {
       return isSignedIn() && (
-        request.auth.uid == get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerId ||
-        exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid))
+        (request.auth.token.email == 'larteyprince132@gmail.com' && request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
 
-    // Organization Root Collection
-    match /organizations/{orgId} {
-      allow get: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isOrgMember(orgId));
-      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
-      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
-      allow update: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+    // Tenant membership logic
+    function isBusinessOwner(businessId) {
+      return isSignedIn() && (
+        request.auth.uid == get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId
+      );
+    }
 
-      // Subcollections under Organization (Isolated per Tenant)
+    function isBusinessMember(businessId) {
+      return isSignedIn() && (
+        isBusinessOwner(businessId) ||
+        exists(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid))
+      );
+    }
+
+    // User Profiles
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow list: if isSuperAdmin();
+      allow create: if isSignedIn() && request.auth.uid == userId &&
+        (!('role' in request.resource.data) || request.resource.data.role != 'SUPER_ADMIN');
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (request.auth.uid == userId &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'status']))
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    // Business Root Collection
+    match /businesses/{businessId} {
+      allow get: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.ownerId == request.auth.uid ||
+        isBusinessMember(businessId)
+      );
+      allow list: if isSignedIn() && (
+        isSuperAdmin() ||
+        resource.data.ownerId == request.auth.uid
+      );
+      allow create: if isSignedIn() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.status == 'active';
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (resource.data.ownerId == request.auth.uid &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'ownerId', 'createdAt']))
+      );
+      allow delete: if isSuperAdmin();
+
+      // Subcollections: strictly isolated per business tenant
       match /sales/{saleId} {
-        allow read, write: if isOrgMember(orgId);
-      }
-
-      match /products/{productId} {
-        allow read, write: if isOrgMember(orgId);
-      }
-
-      match /customers/{customerId} {
-        allow read, write: if isOrgMember(orgId);
-      }
-
-      match /suppliers/{supplierId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isSuperAdmin() || isBusinessMember(businessId);
       }
 
       match /expenses/{expenseId} {
-        allow read, write: if isOrgMember(orgId);
+        allow read, write: if isSuperAdmin() || isBusinessMember(businessId);
       }
 
-      match /ledgerEntries/{entryId} {
-        allow read: if isOrgMember(orgId);
-        // Ledger entries are immutable once written
-        allow create: if isOrgMember(orgId);
+      match /inventory/{productId} {
+        allow read, write: if isSuperAdmin() || isBusinessMember(businessId);
+      }
+
+      match /customers/{customerId} {
+        allow read, write: if isSuperAdmin() || isBusinessMember(businessId);
+      }
+
+      match /suppliers/{supplierId} {
+        allow read, write: if isSuperAdmin() || isBusinessMember(businessId);
+      }
+
+      match /members/{memberId} {
+        allow read: if isSuperAdmin() || isBusinessMember(businessId);
+        allow write: if isSuperAdmin() || isBusinessOwner(businessId);
+      }
+
+      match /audit_logs/{logId} {
+        allow read: if isSuperAdmin() || isBusinessMember(businessId);
+        allow create: if isSuperAdmin() || isBusinessMember(businessId);
         allow update, delete: if false;
       }
+    }
+
+    // Super Admin Platform Audit Logs
+    match /platform_audit_logs/{logId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    // Global Platform Settings
+    match /platform_settings/{settingId} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    // Platform Admins Registry
+    match /admins/{adminId} {
+      allow read, write: if isSuperAdmin();
     }
   }
 }
